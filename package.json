@@ -3,9 +3,14 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev -p 3939",
+    "dev": "next dev -H 0.0.0.0 -p 3939",
     "build": "next build",
-    "start": "next start -p 3939"
+    "start": "next start -H 0.0.0.0 -p 3939",
+    "docker:build": "docker build -t newsfeed:latest .",
+    "docker:run": "docker run -d --name newsfeed --restart unless-stopped -p 3939:3939 newsfeed:latest",
+    "docker:up": "docker compose up -d --build",
+    "docker:down": "docker compose down",
+    "docker:logs": "docker compose logs -f"
   },
   "dependencies": {
     "lucide-react": "^1.8.0",

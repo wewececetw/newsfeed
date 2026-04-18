@@ -41,6 +41,31 @@ npm run dev
 
 開啟 http://localhost:3939
 
+## Docker 部署（推薦用於長期運行）
+
+需要 Docker + Docker Compose。
+
+```bash
+# 一鍵建置 + 背景啟動
+docker compose up -d --build
+
+# 查看 log
+docker compose logs -f
+
+# 停止
+docker compose down
+```
+
+啟動後開啟 http://localhost:3939 或 `http://<主機 IP>:3939`
+
+### Tailscale 內網訪問
+
+若主機已加入 Tailscale，同網路的手機/電腦可直接連：
+
+```
+http://<tailscale-hostname>.tailnet.ts.net:3939
+```
+
 ## 架構
 
 ```

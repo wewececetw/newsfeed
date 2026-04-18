@@ -1,0 +1,18 @@
+services:
+  newsfeed:
+    build: .
+    image: newsfeed:latest
+    container_name: newsfeed
+    restart: unless-stopped
+    ports:
+      - "3939:3939"
+    environment:
+      - NODE_ENV=production
+      - PORT=3939
+      - HOSTNAME=0.0.0.0
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3939/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
