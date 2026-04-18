@@ -3,7 +3,7 @@ import Parser from "rss-parser";
 import { CATEGORIES, CategoryKey } from "@/lib/feeds";
 
 export const runtime = "nodejs";
-export const revalidate = 600;
+export const dynamic = "force-dynamic";
 
 type CustomItem = {
   "media:content"?: { $: { url?: string } } | Array<{ $: { url?: string } }>;
@@ -12,7 +12,7 @@ type CustomItem = {
 };
 
 const parser: Parser<Record<string, never>, CustomItem> = new Parser({
-  timeout: 10_000,
+  timeout: 8_000,
   headers: { "User-Agent": "Mozilla/5.0 NewsAggregator/1.0" },
   customFields: {
     item: [
@@ -39,12 +39,13 @@ function stripHtml(s: string | undefined): string {
 }
 
 function extractImage(
-  item: Parser.Item & CustomItem & {
-    content?: string;
-    contentSnippet?: string;
-    "content:encoded"?: string;
-    summary?: string;
-  }
+  item: Parser.Item &
+    CustomItem & {
+      content?: string;
+      contentSnippet?: string;
+      "content:encoded"?: string;
+      summary?: string;
+    }
 ): string | null {
   const mc = item["media:content"];
   if (mc) {
@@ -94,6 +95,58 @@ async function fetchFeed(name: string, url: string): Promise<NewsItem[]> {
   }
 }
 
+// --- In-memory cache (per-process) ---
+interface CacheEntry {
+  items: NewsItem[];
+  fetchedAt: number;
+  refreshing: boolean;
+}
+const CACHE_TTL_MS = 5 * 60 * 1000; // 5 分鐘新鮮
+const CACHE_STALE_MS = 30 * 60 * 1000; // 30 分鐘內可接受 stale
+const cache = new Map<CategoryKey, CacheEntry>();
+
+async function fetchCategory(category: CategoryKey): Promise<NewsItem[]> {
+  const cfg = CATEGORIES[category];
+  const results = await Promise.all(
+    cfg.feeds.map((f) => fetchFeed(f.name, f.url))
+  );
+  const all = results.flat();
+  all.sort(
+    (a, b) => new Date(b.pubDate).getTime() - new Date(a.pubDate).getTime()
+  );
+  return all.slice(0, 80);
+}
+
+async function getItems(category: CategoryKey): Promise<NewsItem[]> {
+  const now = Date.now();
+  const entry = cache.get(category);
+
+  // Fresh cache — return immediately
+  if (entry && now - entry.fetchedAt < CACHE_TTL_MS) {
+    return entry.items;
+  }
+
+  // Stale-while-revalidate: return stale, refresh in background
+  if (entry && now - entry.fetchedAt < CACHE_STALE_MS) {
+    if (!entry.refreshing) {
+      entry.refreshing = true;
+      fetchCategory(category)
+        .then((items) => {
+          cache.set(category, { items, fetchedAt: Date.now(), refreshing: false });
+        })
+        .catch(() => {
+          if (entry) entry.refreshing = false;
+        });
+    }
+    return entry.items;
+  }
+
+  // No cache or too stale — must wait
+  const items = await fetchCategory(category);
+  cache.set(category, { items, fetchedAt: now, refreshing: false });
+  return items;
+}
+
 export async function GET(req: NextRequest) {
   const category = (req.nextUrl.searchParams.get("category") ??
     "tech") as CategoryKey;
@@ -102,18 +155,18 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "invalid category" }, { status: 400 });
   }
 
-  const results = await Promise.all(
-    cfg.feeds.map((f) => fetchFeed(f.name, f.url))
+  const items = await getItems(category);
+  return NextResponse.json(
+    {
+      category,
+      label: cfg.label,
+      count: items.length,
+      items,
+    },
+    {
+      headers: {
+        "Cache-Control": "public, max-age=60, stale-while-revalidate=600",
+      },
+    }
   );
-  const all = results.flat();
-  all.sort(
-    (a, b) => new Date(b.pubDate).getTime() - new Date(a.pubDate).getTime()
-  );
-
-  return NextResponse.json({
-    category,
-    label: cfg.label,
-    count: all.length,
-    items: all.slice(0, 80),
-  });
 }

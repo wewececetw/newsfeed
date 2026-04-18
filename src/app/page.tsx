@@ -210,14 +210,37 @@ function SourceBadge({ source }: { source: string }) {
   );
 }
 
+interface CategoryState {
+  items: NewsItem[];
+  loadedAt: Date | null;
+  loading: boolean;
+  error: string | null;
+}
+
+const EMPTY_STATE: CategoryState = {
+  items: [],
+  loadedAt: null,
+  loading: false,
+  error: null,
+};
+
+const CLIENT_CACHE_TTL_MS = 5 * 60 * 1000;
+
 export default function Home() {
   const [active, setActive] = useState<CategoryKey>("tech");
-  const [items, setItems] = useState<NewsItem[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [byCategory, setByCategory] = useState<Record<CategoryKey, CategoryState>>({
+    tech: { ...EMPTY_STATE },
+    stock: { ...EMPTY_STATE },
+    world: { ...EMPTY_STATE },
+  });
   const [query, setQuery] = useState("");
-  const [error, setError] = useState<string | null>(null);
   const [dark, setDark] = useState(false);
-  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+
+  const current = byCategory[active];
+  const items = current.items;
+  const loading = current.loading;
+  const error = current.error;
+  const lastUpdated = current.loadedAt;
 
   useEffect(() => {
     const stored = localStorage.getItem("theme");
@@ -234,26 +257,69 @@ export default function Home() {
     localStorage.setItem("theme", next ? "dark" : "light");
   }
 
-  async function load(cat: CategoryKey) {
-    setLoading(true);
-    setError(null);
+  async function load(cat: CategoryKey, force = false) {
+    setByCategory((prev) => {
+      const entry = prev[cat];
+      if (
+        !force &&
+        entry.loadedAt &&
+        Date.now() - entry.loadedAt.getTime() < CLIENT_CACHE_TTL_MS
+      ) {
+        return prev;
+      }
+      return { ...prev, [cat]: { ...entry, loading: true, error: null } };
+    });
+
+    const entry = byCategory[cat];
+    if (
+      !force &&
+      entry.loadedAt &&
+      Date.now() - entry.loadedAt.getTime() < CLIENT_CACHE_TTL_MS
+    ) {
+      return;
+    }
+
     try {
       const res = await fetch(`/api/news?category=${cat}`, { cache: "no-store" });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
-      setItems(data.items ?? []);
-      setLastUpdated(new Date());
+      setByCategory((prev) => ({
+        ...prev,
+        [cat]: {
+          items: data.items ?? [],
+          loadedAt: new Date(),
+          loading: false,
+          error: null,
+        },
+      }));
     } catch (e) {
-      setError((e as Error).message);
-      setItems([]);
-    } finally {
-      setLoading(false);
+      setByCategory((prev) => ({
+        ...prev,
+        [cat]: {
+          ...prev[cat],
+          loading: false,
+          error: (e as Error).message,
+        },
+      }));
     }
   }
 
+  // Active category: load on first view
   useEffect(() => {
     load(active);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [active]);
+
+  // Prefetch other categories after initial load
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      (Object.keys(byCategory) as CategoryKey[])
+        .filter((k) => k !== active)
+        .forEach((k) => load(k));
+    }, 800);
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -299,7 +365,7 @@ export default function Home() {
               {dark ? <Sun size={16} /> : <Moon size={16} />}
             </button>
             <button
-              onClick={() => load(active)}
+              onClick={() => load(active, true)}
               disabled={loading}
               aria-label="重新整理"
               className="flex h-9 w-9 items-center justify-center rounded-lg text-zinc-600 transition hover:bg-zinc-100 hover:text-zinc-900 disabled:opacity-40 dark:text-zinc-400 dark:hover:bg-zinc-800 dark:hover:text-white"
