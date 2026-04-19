@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Cpu,
   TrendingUp,
@@ -378,32 +378,33 @@ export default function Home() {
   const filteredLenRef = useRef(filtered.length);
   filteredLenRef.current = filtered.length;
 
-  const observerRef = useRef<IntersectionObserver | null>(null);
-  const sentinelRef = (node: HTMLDivElement | null) => {
-    if (observerRef.current) {
-      observerRef.current.disconnect();
-      observerRef.current = null;
-    }
-    if (!node) return;
-    const io = new IntersectionObserver(
-      (entries) => {
-        if (entries[0]?.isIntersecting) {
-          setVisibleCount((v) =>
-            Math.min(v + PAGE_SIZE, filteredLenRef.current)
-          );
-        }
-      },
-      { rootMargin: "800px" }
-    );
-    io.observe(node);
-    observerRef.current = io;
-  };
-  useEffect(
-    () => () => {
-      observerRef.current?.disconnect();
-    },
-    []
-  );
+  // Plain scroll-distance check. Fire when the user is within 1.5
+  // viewports of the document bottom. Works regardless of sentinel
+  // element timing / re-mount order.
+  useEffect(() => {
+    const check = () => {
+      if (filteredLenRef.current === 0) return;
+      const { scrollY, innerHeight } = window;
+      const docHeight = document.documentElement.scrollHeight;
+      const distanceFromBottom = docHeight - (scrollY + innerHeight);
+      if (distanceFromBottom < innerHeight * 3) {
+        setVisibleCount((v) => {
+          if (v >= filteredLenRef.current) return v;
+          return Math.min(v + PAGE_SIZE, filteredLenRef.current);
+        });
+      }
+    };
+    const rafId = requestAnimationFrame(check);
+    window.addEventListener("scroll", check, { passive: true });
+    window.addEventListener("resize", check);
+    return () => {
+      cancelAnimationFrame(rafId);
+      window.removeEventListener("scroll", check);
+      window.removeEventListener("resize", check);
+    };
+  }, [visibleCount, active]);
+
+  const sentinelRef = useCallback(() => {}, []);
 
   const activeTab = TABS.find((t) => t.key === active)!;
   const ActiveIcon = activeTab.icon;
