@@ -375,21 +375,35 @@ export default function Home() {
     setVisibleCount(PAGE_SIZE);
   }, [active, query]);
 
-  const sentinelRef = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
-    if (!sentinelRef.current) return;
-    const el = sentinelRef.current;
+  const filteredLenRef = useRef(filtered.length);
+  filteredLenRef.current = filtered.length;
+
+  const observerRef = useRef<IntersectionObserver | null>(null);
+  const sentinelRef = (node: HTMLDivElement | null) => {
+    if (observerRef.current) {
+      observerRef.current.disconnect();
+      observerRef.current = null;
+    }
+    if (!node) return;
     const io = new IntersectionObserver(
       (entries) => {
         if (entries[0]?.isIntersecting) {
-          setVisibleCount((v) => Math.min(v + PAGE_SIZE, filtered.length));
+          setVisibleCount((v) =>
+            Math.min(v + PAGE_SIZE, filteredLenRef.current)
+          );
         }
       },
-      { rootMargin: "600px" }
+      { rootMargin: "800px" }
     );
-    io.observe(el);
-    return () => io.disconnect();
-  }, [filtered.length]);
+    io.observe(node);
+    observerRef.current = io;
+  };
+  useEffect(
+    () => () => {
+      observerRef.current?.disconnect();
+    },
+    []
+  );
 
   const activeTab = TABS.find((t) => t.key === active)!;
   const ActiveIcon = activeTab.icon;
