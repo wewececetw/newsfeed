@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Cpu,
   TrendingUp,
@@ -107,40 +107,74 @@ function isHot(iso: string): boolean {
   return Date.now() - new Date(iso).getTime() < 3 * 60 * 60 * 1000;
 }
 
+// In-memory og:image cache — survives tab switch within one session
+const ogCache = new Map<string, string | null>();
+const ogInflight = new Map<string, Promise<string | null>>();
+
+function fetchOg(url: string): Promise<string | null> {
+  if (ogCache.has(url)) return Promise.resolve(ogCache.get(url) ?? null);
+  const inflight = ogInflight.get(url);
+  if (inflight) return inflight;
+  const p = fetch(`/api/og?url=${encodeURIComponent(url)}`)
+    .then((r) => r.json())
+    .then((d: { image?: string | null }) => {
+      const img = d.image ?? null;
+      ogCache.set(url, img);
+      ogInflight.delete(url);
+      return img;
+    })
+    .catch(() => {
+      ogCache.set(url, null);
+      ogInflight.delete(url);
+      return null;
+    });
+  ogInflight.set(url, p);
+  return p;
+}
+
 function Thumbnail({
   src,
   fallbackSeed,
   source,
   className,
+  eager = false,
 }: {
   src: string | null;
   fallbackSeed: string;
   source: string;
   className?: string;
+  eager?: boolean;
 }) {
+  const cachedOg = !src ? ogCache.get(fallbackSeed) : undefined;
+  const initialSrc = src ?? cachedOg ?? null;
   const [error, setError] = useState(false);
-  const [resolvedSrc, setResolvedSrc] = useState<string | null>(src);
-  const [loading, setLoading] = useState(!src);
+  const [resolvedSrc, setResolvedSrc] = useState<string | null>(initialSrc);
+  const [loading, setLoading] = useState(!initialSrc);
 
   useEffect(() => {
-    setResolvedSrc(src);
     setError(false);
-    if (!src) {
-      setLoading(true);
-      let cancelled = false;
-      fetch(`/api/og?url=${encodeURIComponent(fallbackSeed)}`)
-        .then((r) => r.json())
-        .then((d) => {
-          if (!cancelled && d.image) setResolvedSrc(d.image);
-        })
-        .catch(() => {})
-        .finally(() => {
-          if (!cancelled) setLoading(false);
-        });
-      return () => {
-        cancelled = true;
-      };
+    if (src) {
+      setResolvedSrc(src);
+      setLoading(false);
+      return;
     }
+    const cached = ogCache.get(fallbackSeed);
+    if (cached !== undefined) {
+      setResolvedSrc(cached);
+      setLoading(false);
+      return;
+    }
+    setLoading(true);
+    let cancelled = false;
+    fetchOg(fallbackSeed).then((img) => {
+      if (!cancelled) {
+        setResolvedSrc(img);
+        setLoading(false);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [src, fallbackSeed]);
 
   const meta = sourceMeta(source);
@@ -163,7 +197,9 @@ function Thumbnail({
           <img
             src={resolvedSrc!}
             alt=""
-            loading="lazy"
+            loading={eager ? "eager" : "lazy"}
+            decoding="async"
+            fetchPriority={eager ? "high" : "low"}
             onError={() => setError(true)}
             onLoad={() => setLoading(false)}
             className="h-full w-full object-cover transition-transform duration-[600ms] ease-out group-hover:scale-[1.04]"
@@ -332,11 +368,36 @@ export default function Home() {
     );
   }, [items, query]);
 
+  // Pagination: show batches, load more on scroll
+  const PAGE_SIZE = 20;
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+  useEffect(() => {
+    setVisibleCount(PAGE_SIZE);
+  }, [active, query]);
+
+  const sentinelRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!sentinelRef.current) return;
+    const el = sentinelRef.current;
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) {
+          setVisibleCount((v) => Math.min(v + PAGE_SIZE, filtered.length));
+        }
+      },
+      { rootMargin: "600px" }
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [filtered.length]);
+
   const activeTab = TABS.find((t) => t.key === active)!;
   const ActiveIcon = activeTab.icon;
-  const [hero, ...rest] = filtered;
+  const visible = filtered.slice(0, visibleCount);
+  const [hero, ...rest] = visible;
   const featured = rest.slice(0, 2);
   const list = rest.slice(2);
+  const hasMore = visibleCount < filtered.length;
 
   return (
     <main className="mx-auto max-w-5xl px-4 pb-20 pt-4 sm:px-6">
@@ -482,6 +543,7 @@ export default function Home() {
               fallbackSeed={hero.link}
               source={hero.source}
               className="aspect-[16/9] sm:aspect-[2.2/1]"
+              eager
             />
             <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/90 via-black/50 to-transparent p-5 pt-16 text-white sm:p-7 sm:pt-24">
               <div className="mb-3 flex flex-wrap items-center gap-2 text-[11px] font-medium">
@@ -615,6 +677,16 @@ export default function Home() {
           </li>
         ))}
       </ul>
+
+      {hasMore && (
+        <>
+          <div ref={sentinelRef} aria-hidden className="h-4" />
+          <div className="mt-4 flex items-center justify-center py-2 text-[12px] text-zinc-400">
+            <div className="h-3 w-3 animate-spin rounded-full border-2 border-zinc-300 border-t-transparent dark:border-zinc-600 dark:border-t-transparent" />
+            <span className="ml-2">載入更多…</span>
+          </div>
+        </>
+      )}
 
       <footer className="mt-14 text-center text-[11px] text-zinc-400">
         各媒體 RSS 聚合 · 10 分鐘快取 · 點擊開新分頁閱讀
