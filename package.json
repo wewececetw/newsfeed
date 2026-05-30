@@ -6,6 +6,7 @@
     "dev": "next dev -H 0.0.0.0 -p 3939",
     "build": "next build",
     "start": "next start -H 0.0.0.0 -p 3939",
+    "preview:smoke": "node scripts/preview-smoke.mjs",
     "docker:build": "docker build -t newsfeed:latest .",
     "docker:run": "docker run -d --name newsfeed --restart unless-stopped -p 3939:3939 newsfeed:latest",
     "docker:up": "docker compose up -d --build",
